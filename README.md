@@ -1,0 +1,1 @@
+This is a minimalist GUI tool for tinkering with 3D printers. It allows general movement and temperature controls as well as executing arbitrary gcode over USB.
