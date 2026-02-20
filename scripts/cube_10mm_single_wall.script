@@ -1,0 +1,66 @@
+; Configure movement
+M201 X9000 Y9000 Z500 E10000 ; sets maximum accelerations, mm/sec^2
+M203 X30 Y30 Z2 E1 ; sets maximum feedrates, mm/sec
+M204 P1500 R1500 T1500 ; sets acceleration (P, T) and retract acceleration (R), mm/sec^2
+M205 X10.00 Y10.00 Z0.20 E2.50 ; sets the jerk limits, mm/sec
+M205 S0 T0 ; sets the minimum extruding and travel feed rate, mm/sec
+
+
+
+; Preheat
+M107
+M190 S60 ; set bed temperature and wait for it to be reached
+;M104 S200 ; set temperature
+M109 S200
+
+; Home
+G28
+
+; Prepare
+G1 Z5 F5000 ; lift nozzle
+M109 S200 ; set extruder temperature and wait for it to be reached
+G21 ; set units to millimeters
+G90 ; use absolute coordinates
+;M82 ; use absolute distances for extrusion
+M83
+G92 E0 ; set axis steps per unit
+
+; Print
+G1 Z0.15
+G1 X40 Y40
+G1 X120 Y40 E+1.30962
+G1 X120 Y120 E+1.30962
+G1 X40 Y120 E+1.30962
+G1 X40 Y40 E+1.30962
+
+G1 Z0.25
+G1 X120 Y40 E+1.30962
+G1 X120 Y120 E+1.30962
+G1 X40 Y120 E+1.30962
+G1 X40 Y40 E+1.30962
+
+G1 Z0.35
+G1 X120 Y40 E+1.30962
+G1 X120 Y120 E+1.30962
+G1 X40 Y120 E+1.30962
+G1 X40 Y40 E+1.30962
+
+G1 Z0.45
+G1 X120 Y40 E+1.30962
+G1 X120 Y120 E+1.30962
+G1 X40 Y120 E+1.30962
+G1 X40 Y40 E+1.30962
+
+G1 Z0.55
+G1 X120 Y40 E+1.30962
+G1 X120 Y120 E+1.30962
+G1 X40 Y120 E+1.30962
+G1 X40 Y40 E+1.30962
+
+;G1 Z1
+;G1 X80 Y80
+;G1 X90 Y80
+;G1 X90 Y90
+;G1 X80 Y90
+;G1 X80 Y80
+
