@@ -18,6 +18,7 @@ G28
 
 ; Prepare
 G1 Z5 F5000 ; lift nozzle
+G106 ; Turn on fan
 M109 S200 ; set extruder temperature and wait for it to be reached
 G21 ; set units to millimeters
 G90 ; use absolute coordinates
@@ -64,3 +65,4 @@ G1 X40 Y40 E+1.30962
 ;G1 X80 Y90
 ;G1 X80 Y80
 
+G107 ; Turn off fan

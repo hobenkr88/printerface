@@ -1,0 +1,4 @@
+M106 ; Turn on fan
+M109 S200 ; Wait for hotend
+M83 ; Set extruder to relative
+G1 E+10

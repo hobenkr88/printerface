@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-# FIXME: Serial interface does't disconnect on Ctrl+Q
+
 
 import wx
 import serial
@@ -11,6 +11,12 @@ import time
 import zmq
 import json
 import re
+
+
+# FIXME: Serial interface does't disconnect on Ctrl+Q
+# FIXME: Maybe move current temps to a seperate view with position info
+# FIXME: Handle failed usb connection
+
 
 def split_keep(string, sep):
     """Usage:
@@ -36,6 +42,9 @@ SERIALRX = wx.NewEventType()
 # bind to serial data receive events
 EVT_SERIALRX = wx.PyEventBinder(SERIALRX, 0)
 
+SERIALTX = wx.NewEventType()
+# bind to serial data transmit events
+EVT_SERIALTX = wx.PyEventBinder(SERIALTX, 1)
 
 class SerialRxEvent(wx.PyCommandEvent):
     eventType = SERIALRX
@@ -43,6 +52,15 @@ class SerialRxEvent(wx.PyCommandEvent):
     def __init__(self, data):
         wx.PyCommandEvent.__init__(self, self.eventType)
         self.data = data
+        return None
+    
+class SerialTxEvent(wx.PyCommandEvent):
+    eventType = SERIALTX
+
+    def __init__(self, data):
+        wx.PyCommandEvent.__init__(self, self.eventType)
+        self.data = data
+        return None
 
 
 # I don't this this class is used
@@ -143,12 +161,13 @@ class SerialInterface():
         return None
     
     def ReadWriteLoop(self, serial_connection, stop_flag, write_queue):
-        command_line = ""
+        received_log = ""
+        transmit_log = ""
         previous_write_acked = True
 
         while not stop_flag.is_set():
             #print('LOOP')
-            #print("Command: "+command_line)
+            #print("Command: "+received_log)
             #print("PreviousAcked: "+str(previous_write_acked))
             
             # Read
@@ -159,36 +178,42 @@ class SerialInterface():
                 messages = list(split_keep(data_decoded, "\n"))
                 
                 for message in messages:
-                    command_line += message
+                    received_log += message
                     
-                    if command_line.endswith("\n"):
-                        if command_line.startswith("start\n"):
+                    if message.endswith("\n"):
+                        if message.startswith("start\n"):
                             # Start the printer reporting temperatures.
-                            # FIXME: Look for a better sport to put this
+                            # FIXME: Look for a better spot to put this
                             command = "M155 S1\n"
                             command_bytes = command.encode('ascii')
                             self.write_queue.put(command_bytes)
                             # END FIXME
-                        elif command_line == 'ok\n':
+                        elif message == 'ok\n':
                             previous_write_acked = True
                         else:
-                            event = SerialRxEvent(command_line)
+                            event = SerialRxEvent(message)
                             self.main_frame_event_handler.AddPendingEvent(event)
-                        command_line = ""
+                        #received_log = ""
             
             # Write
             if previous_write_acked == True:
                 #print('1')
                 if not write_queue.empty():
-                    print('2')
                     previous_write_acked = False
                     to_send = write_queue.get()
-                    print("Sending: "+str(to_send))
+                    #transmit_log += to_send.decode()
+                    print('To send: '+to_send.decode())
+                    event = SerialTxEvent(to_send)
+                    self.main_frame_event_handler.AddPendingEvent(event)
+                    
+
+                    #print("Sending: "+str(to_send))
                     serial_connection.write(to_send)
                     write_queue.task_done()
             
             # Is there a better way than using sleep here? Also not sure about the speed.
-            time.sleep(0.1)
+            # Temps seem glitchy (probably because of the sleep)
+            time.sleep(0.01)
             
         return None
 
@@ -247,7 +272,7 @@ class ManualControlsPanel(wx.Panel):
         self.x_interval = "1"
         self.y_interval = "1"
         self.z_interval = "1"
-        self.e_interval = "1"
+        self.e1_interval = "1"
         self.target_bed_temp = "0"
         self.target_extruder_temp = "0"
         
@@ -258,43 +283,43 @@ class ManualControlsPanel(wx.Panel):
     def InitUI(self):
         self.sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.positional_controls_sizer = wx.GridSizer(6,3, 0, 0)
-        self.temperatur_controls_sizer = wx.GridSizer(2,3, 0, 0)
+        self.positional_controls_gsizer = wx.GridSizer(6,3, 0, 0)
+        self.temperature_controls_gsizer = wx.GridSizer(2,3, 0, 0)
         
         self.x_details = wx.Panel(self)
         self.y_details = wx.Panel(self)
         self.z_details = wx.Panel(self)
-        self.e_details = wx.Panel(self)
+        self.e1_details = wx.Panel(self)
 
-        self.x_details_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.y_details_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.z_details_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.e_details_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.x_details_vsizer = wx.BoxSizer(wx.VERTICAL)
+        self.y_details_vsizer = wx.BoxSizer(wx.VERTICAL)
+        self.z_details_vsizer = wx.BoxSizer(wx.VERTICAL)
+        self.e1_details_vsizer = wx.BoxSizer(wx.VERTICAL)
         
 
         self.x_text = wx.StaticText(self.x_details, label="X Axis: ")
         self.y_text = wx.StaticText(self.y_details, label="Y Axis: ")
         self.z_text = wx.StaticText(self.z_details, label="Z Axis: ")
-        self.e_text = wx.StaticText(self.e_details, label="E Axis: ")
+        self.e1_text = wx.StaticText(self.e1_details, label="E1 Extruder: ")
         
         self.x_interval_textbox = wx.TextCtrl(self.x_details, value=self.x_interval)
         self.y_interval_textbox = wx.TextCtrl(self.y_details, value=self.y_interval)
         self.z_interval_textbox = wx.TextCtrl(self.z_details, value=self.z_interval)
-        self.e_interval_textbox = wx.TextCtrl(self.e_details, value=self.e_interval)
+        self.e1_interval_textbox = wx.TextCtrl(self.e1_details, value=self.e1_interval)
         
-        self.x_details_sizer.Add(self.x_text, 0)
-        self.x_details_sizer.Add(self.x_interval_textbox, 0)
-        self.y_details_sizer.Add(self.y_text, 0)
-        self.y_details_sizer.Add(self.y_interval_textbox, 0)
-        self.z_details_sizer.Add(self.z_text, 0)
-        self.z_details_sizer.Add(self.z_interval_textbox, 0)
-        self.e_details_sizer.Add(self.e_text, 0)
-        self.e_details_sizer.Add(self.e_interval_textbox, 0)
+        self.x_details_vsizer.Add(self.x_text, 0)
+        self.x_details_vsizer.Add(self.x_interval_textbox, 0)
+        self.y_details_vsizer.Add(self.y_text, 0)
+        self.y_details_vsizer.Add(self.y_interval_textbox, 0)
+        self.z_details_vsizer.Add(self.z_text, 0)
+        self.z_details_vsizer.Add(self.z_interval_textbox, 0)
+        self.e1_details_vsizer.Add(self.e1_text, 0)
+        self.e1_details_vsizer.Add(self.e1_interval_textbox, 0)
 
-        self.x_details.SetSizer(self.x_details_sizer)
-        self.y_details.SetSizer(self.y_details_sizer)
-        self.z_details.SetSizer(self.z_details_sizer)
-        self.e_details.SetSizer(self.e_details_sizer)
+        self.x_details.SetSizer(self.x_details_vsizer)
+        self.y_details.SetSizer(self.y_details_vsizer)
+        self.z_details.SetSizer(self.z_details_vsizer)
+        self.e1_details.SetSizer(self.e1_details_vsizer)
 
         # FIXME: I think these buttons should have a different parent (same with other buttons on controls)
         self.x_plus_button = wx.Button(self, label="+")
@@ -306,13 +331,13 @@ class ManualControlsPanel(wx.Panel):
         self.z_plus_button = wx.Button(self, label="+")
         self.z_minus_button = wx.Button(self, label="-")
         
-        self.e_plus_button = wx.Button(self, label="+")
-        self.e_minus_button = wx.Button(self, label="-")
+        self.e1_plus_button = wx.Button(self, label="+")
+        self.e1_minus_button = wx.Button(self, label="-")
         
         
 
 
-        self.positional_controls_sizer.AddMany([
+        self.positional_controls_gsizer.AddMany([
             (self.x_details, 0, wx.EXPAND),
             (self.x_minus_button, 0, wx.EXPAND),
             (self.x_plus_button, 0, wx.EXPAND),
@@ -322,9 +347,9 @@ class ManualControlsPanel(wx.Panel):
             (self.z_details, 0, wx.EXPAND),
             (self.z_minus_button, 0, wx.EXPAND),
             (self.z_plus_button, 0, wx.EXPAND),
-            (self.e_details, 0, wx.EXPAND),
-            (self.e_minus_button, 0, wx.EXPAND),
-            (self.e_plus_button, 0, wx.EXPAND),
+            (self.e1_details, 0, wx.EXPAND),
+            (self.e1_minus_button, 0, wx.EXPAND),
+            (self.e1_plus_button, 0, wx.EXPAND),
             
         ])
         
@@ -337,43 +362,43 @@ class ManualControlsPanel(wx.Panel):
         self.current_extruder_temp_details = wx.Panel(self)
 
 
-        self.target_bed_temp_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.current_bed_temp_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.target_extruder_temp_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.current_extruder_temp_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.target_bed_temp_vsizer = wx.BoxSizer(wx.VERTICAL)
+        self.current_bed_temp_vsizer = wx.BoxSizer(wx.VERTICAL)
+        self.target_extruder_temp_vsizer = wx.BoxSizer(wx.VERTICAL)
+        self.current_extruder_temp_vsizer = wx.BoxSizer(wx.VERTICAL)
 
         self.target_bed_temp_text = wx.StaticText(self.target_bed_temp_details, label="Target Bed Temp: ")
         self.target_bed_temp_textbox = wx.TextCtrl(self.target_bed_temp_details, value=self.target_bed_temp)
 
         self.current_bed_temp_text = wx.StaticText(self.current_bed_temp_details, label="Current Bed Temp: ")
-        self.current_bed_temp_textbox = wx.StaticText(self.current_bed_temp_details, label=self.target_bed_temp)
+        self.current_bed_temp_textbox = wx.StaticText(self.current_bed_temp_details, label=self.target_bed_temp+" C")
         
         self.target_extruder_temp_text = wx.StaticText(self.target_extruder_temp_details, label="Target Extruder Temp: ")
         self.target_extruder_temp_textbox = wx.TextCtrl(self.target_extruder_temp_details, value=self.target_extruder_temp)
 
         self.current_extruder_temp_text = wx.StaticText(self.current_extruder_temp_details, label="Current Extruder Temp: ")
-        self.current_extruder_temp_textbox = wx.StaticText(self.current_extruder_temp_details, label=self.target_extruder_temp)
+        self.current_extruder_temp_textbox = wx.StaticText(self.current_extruder_temp_details, label=self.target_extruder_temp + " C")
 
-        self.target_bed_temp_sizer.Add(self.target_bed_temp_text, 0)
-        self.target_bed_temp_sizer.Add(self.target_bed_temp_textbox, 0)
-        self.current_bed_temp_sizer.Add(self.current_bed_temp_text, 0)
-        self.current_bed_temp_sizer.Add(self.current_bed_temp_textbox, 0)
+        self.target_bed_temp_vsizer.Add(self.target_bed_temp_text, 0)
+        self.target_bed_temp_vsizer.Add(self.target_bed_temp_textbox, 0)
+        self.current_bed_temp_vsizer.Add(self.current_bed_temp_text, 0)
+        self.current_bed_temp_vsizer.Add(self.current_bed_temp_textbox, 0)
 
-        self.target_extruder_temp_sizer.Add(self.target_extruder_temp_text, 0)
-        self.target_extruder_temp_sizer.Add(self.target_extruder_temp_textbox, 0)
-        self.current_extruder_temp_sizer.Add(self.current_extruder_temp_text, 0)
-        self.current_extruder_temp_sizer.Add(self.current_extruder_temp_textbox, 0)
+        self.target_extruder_temp_vsizer.Add(self.target_extruder_temp_text, 0)
+        self.target_extruder_temp_vsizer.Add(self.target_extruder_temp_textbox, 0)
+        self.current_extruder_temp_vsizer.Add(self.current_extruder_temp_text, 0)
+        self.current_extruder_temp_vsizer.Add(self.current_extruder_temp_textbox, 0)
 
-        self.target_bed_temp_details.SetSizer(self.target_bed_temp_sizer)
-        self.current_bed_temp_details.SetSizer(self.current_bed_temp_sizer)
-        self.target_extruder_temp_details.SetSizer(self.target_extruder_temp_sizer)
-        self.current_extruder_temp_details.SetSizer(self.current_extruder_temp_sizer)
+        self.target_bed_temp_details.SetSizer(self.target_bed_temp_vsizer)
+        self.current_bed_temp_details.SetSizer(self.current_bed_temp_vsizer)
+        self.target_extruder_temp_details.SetSizer(self.target_extruder_temp_vsizer)
+        self.current_extruder_temp_details.SetSizer(self.current_extruder_temp_vsizer)
 
         self.set_target_bed_temp_button = wx.Button(self, label="Set Bed Temp")
 
         self.set_target_extruder_temp_button = wx.Button(self, label="Set Extruder Temp")
 
-        self.temperatur_controls_sizer.AddMany([
+        self.temperature_controls_gsizer.AddMany([
             (self.target_bed_temp_details, 0, wx.EXPAND),
             (self.current_bed_temp_details, 0, wx.EXPAND),
             (self.set_target_bed_temp_button, 0, wx.EXPAND),
@@ -383,8 +408,8 @@ class ManualControlsPanel(wx.Panel):
         ])
 
 
-        self.sizer.Add(self.positional_controls_sizer, 1, wx.EXPAND)
-        self.sizer.Add(self.temperatur_controls_sizer, 1, wx.EXPAND)
+        self.sizer.Add(self.positional_controls_gsizer, 1, wx.EXPAND)
+        self.sizer.Add(self.temperature_controls_gsizer, 1, wx.EXPAND)
         self.sizer.AddStretchSpacer(1)
         
         self.SetSizer(self.sizer)
@@ -395,6 +420,7 @@ class ManualControlsPanel(wx.Panel):
         self.Bind(wx.EVT_TEXT, self.OnXIntervalChange, self.x_interval_textbox)
         self.Bind(wx.EVT_TEXT, self.OnYIntervalChange, self.y_interval_textbox)
         self.Bind(wx.EVT_TEXT, self.OnZIntervalChange, self.z_interval_textbox)
+        self.Bind(wx.EVT_TEXT, self.OnE1IntervalChange, self.e1_interval_textbox)
         self.Bind(wx.EVT_TEXT, self.OnTargetBedTempChange, self.target_bed_temp_textbox)
         self.Bind(wx.EVT_TEXT, self.OnTargetExtruderTempChange, self.target_extruder_temp_textbox)
 
@@ -407,8 +433,8 @@ class ManualControlsPanel(wx.Panel):
         self.Bind(wx.EVT_BUTTON, self.OnZMinus, self.z_minus_button)
         self.Bind(wx.EVT_BUTTON, self.OnZPlus, self.z_plus_button)
         
-        self.Bind(wx.EVT_BUTTON, self.OnEMinus, self.e_minus_button)
-        self.Bind(wx.EVT_BUTTON, self.OnEPlus, self.e_plus_button)
+        self.Bind(wx.EVT_BUTTON, self.OnE1Minus, self.e1_minus_button)
+        self.Bind(wx.EVT_BUTTON, self.OnE1Plus, self.e1_plus_button)
 
         self.Bind(wx.EVT_BUTTON, self.OnSetTargetBedTemp, self.set_target_bed_temp_button)
 
@@ -419,18 +445,22 @@ class ManualControlsPanel(wx.Panel):
     # FIXME: Might also want to check if I can get text from event instad
     def OnXIntervalChange(self, e):
         new_interval = self.x_interval_textbox.GetLineText(0)
-        self.z_interval = new_interval
+        self.x_interval = new_interval
         return None
     
     def OnYIntervalChange(self, e):
         new_interval = self.y_interval_textbox.GetLineText(0)
-        self.z_interval = new_interval
+        self.y_interval = new_interval
         return None
     
     def OnZIntervalChange(self, e):
         new_interval = self.z_interval_textbox.GetLineText(0)
         self.z_interval = new_interval
         return None
+
+    def OnE1IntervalChange(self, e):
+        new_interval = self.e1_interval_textbox.GetLineText(0)
+        self.e1_interval = new_interval
 
     def OnTargetBedTempChange(self, e):
         new_target_bed_temp = self.target_bed_temp_textbox.GetLineText(0)
@@ -443,22 +473,22 @@ class ManualControlsPanel(wx.Panel):
         return None
     
     def OnXMinus(self, e):
-        command = "G91\nG0 X-"+self.z_interval+" F1000\nG90\n"
+        command = "G91\nG0 X-"+self.x_interval+" F1000\nG90\n"
         self.serial_connection.WriteLine(command)
         return None
     
     def OnXPlus(self, e):
-        command = "G91\nG0 X+"+self.z_interval+" F1000\nG90\n"
+        command = "G91\nG0 X+"+self.x_interval+" F1000\nG90\n"
         self.serial_connection.WriteLine(command)
         return None
         
     def OnYMinus(self, e):
-        command = "G91\nG0 Y-"+self.z_interval+" F1000\nG90\n"
+        command = "G91\nG0 Y-"+self.y_interval+" F1000\nG90\n"
         self.serial_connection.WriteLine(command)
         return None
     
     def OnYPlus(self, e):
-        command = "G91\nG0 Y+"+self.z_interval+" F1000\nG90\n"
+        command = "G91\nG0 Y+"+self.y_interval+" F1000\nG90\n"
         self.serial_connection.WriteLine(command)
         return None
     
@@ -472,12 +502,14 @@ class ManualControlsPanel(wx.Panel):
         self.serial_connection.WriteLine(command)
         return None
     
-    def OnEMinus(self, e):
-        
+    def OnE1Minus(self, e):
+        command = "G91\nG0 E-"+self.e1_interval+"\nG90\n"
+        self.serial_connection.WriteLine(command)
         return None
     
-    def OnEPlus(self, e):
-        
+    def OnE1Plus(self, e):
+        command = "G91\nG0 E+"+self.e1_interval+"\nG90\n"
+        self.serial_connection.WriteLine(command)
         return None
     
     def OnSetTargetBedTemp(self, e):
@@ -487,16 +519,22 @@ class ManualControlsPanel(wx.Panel):
         return None
     
     def OnSetTargetExtruderTemp(self, e):
-        command = "M104 S"+self.target_extruder_temp+"\n"
-        self.serial_connection.WriteLine(command)
+        if self.target_extruder_temp != "0":
+            command = "M106\nM104 S"+self.target_extruder_temp+"\n" # Perhaps move fan speed (M106) to its own control
+            self.serial_connection.WriteLine(command)
+        else:
+            command = "M104 S0\nM107"
+            self.serial_connection.WriteLine(command)
         return None
     
     def OnCurrentTempsUpdated(self, e):
         if e.data.startswith(" T:"):
-            current_bed_temp = re.search('(?<=B:)(\d\d\\.\d\d)', e.data)
-            self.current_bed_temp_textbox.SetLabel(current_bed_temp.group(0))
-            current_extruder_temp = re.search('(?<=T:)(\\d\\d\\.\\d\\d)', e.data)
-            self.current_extruder_temp_textbox.SetLabel(current_extruder_temp.group(0))
+            current_bed_temp = re.search('(?<=B:)(\\d\\d\\d?.\\d\\d)', e.data)
+            if current_bed_temp != None:
+                self.current_bed_temp_textbox.SetLabel(current_bed_temp.group(0)+" C")
+            current_extruder_temp = re.search('(?<=T:)(\\d\\d\\d?\\.\\d\\d)', e.data)
+            if current_extruder_temp != None:
+                self.current_extruder_temp_textbox.SetLabel(current_extruder_temp.group(0)+" C")
         return None
     
 # ----------------------------------------------------------------------
@@ -569,12 +607,13 @@ class ScriptingPanel(wx.Panel):
         
         running_script_lines_array = self.running_script.split("\n")
         for line in running_script_lines_array:
+            # FIXME: Maybe add a pause button?
             #print(self.main_frame.printer_message_overflow)
             #while self.main_frame.printer_message_overflow != 0:
             #    pass
             #print(repr(line))
             to_send = line + "\n"
-            self.main_frame.OnSerialWrite(to_send)
+            #self.main_frame.OnSerialWrite(to_send)
             self.serial_interface.WriteLine(to_send)
         #self.serial_connection.write(bytes(script_content, 'ascii'))
         
@@ -583,8 +622,9 @@ class ScriptingPanel(wx.Panel):
 # ----------------------------------------------------------------------
 
 class MessageLogPanel(wx.Panel):
-    def __init__(self, parent):
+    def __init__(self, parent, log_title):
         self.parent = parent
+        self.log_title = log_title
         
         super().__init__(self.parent)
         
@@ -595,10 +635,12 @@ class MessageLogPanel(wx.Panel):
         return None
         
     def InitUI(self):
+        self.log_title = wx.StaticText(self, label=self.log_title)
         self.log_panel = wx.TextCtrl(self, style=(wx.TE_MULTILINE | wx.TE_READONLY))
         
         self.main_sizer = wx.BoxSizer(wx.VERTICAL)
         
+        self.main_sizer.Add(self.log_title)
         self.main_sizer.Add(self.log_panel, 1, wx.EXPAND)
         
         self.SetSizer(self.main_sizer)
@@ -648,7 +690,7 @@ class Printerface(wx.Frame):
         self.BindEvents()
 
         self.SetSize((1000, 600))
-        self.SetTitle('Simple menu')
+        self.SetTitle('Printerface')
         self.Centre()
         
         return None
@@ -665,7 +707,8 @@ class Printerface(wx.Frame):
         self.main_panel = wx.Panel(self)
         
         self.main_content_panel = wx.Panel(self.main_panel)
-        self.message_log_panel = MessageLogPanel(self.main_panel)
+        self.messages_received_panel = MessageLogPanel(self.main_panel, "Data Received")
+        self.messages_transmitted_panel = MessageLogPanel(self.main_panel, "Data Sent")
         
         self.connection_panel = wx.Panel(self.main_content_panel)
         
@@ -697,7 +740,8 @@ class Printerface(wx.Frame):
         self.main_content_panel.SetSizer(self.main_content_sizer)
         
         self.main_panel_sizer.Add(self.main_content_panel, 1, wx.EXPAND)
-        self.main_panel_sizer.Add(self.message_log_panel, 1, wx.EXPAND)
+        self.main_panel_sizer.Add(self.messages_received_panel, 1, wx.EXPAND)
+        self.main_panel_sizer.Add(self.messages_transmitted_panel, 1, wx.EXPAND)
         
         self.main_panel.SetSizer(self.main_panel_sizer)
         return None
@@ -715,6 +759,7 @@ class Printerface(wx.Frame):
         
         # Misc events
         self.Bind(EVT_SERIALRX, self.OnSerialRead)
+        self.Bind(EVT_SERIALTX, self.OnSerialWrite)
         
         return None
 
@@ -779,12 +824,17 @@ class Printerface(wx.Frame):
     def OnSerialRead(self, e):
         message = e.data
 
-        self.message_log_panel.Append(message)
+        self.messages_received_panel.Append(message)
         self.manual_control_panel.OnCurrentTempsUpdated(e)
         return None
     
-    def OnSerialWrite(self, message):
+    def OnSerialWrite(self, e):
+        #print(type(e))
+        message = e.data.decode()
+        #message = e
         #self.printer_message_overflow += 1
+        
+        self.messages_transmitted_panel.Append(message)
         return None
 
 
